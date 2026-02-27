@@ -85,6 +85,16 @@ curl -X POST -F "image=@photos/soup.jpg" http://localhost:5000/detect
 
 Place your image files in the `photos/` folder. Replace `soup.jpg` with your actual image filename.
 
+### Test Locally Against the Public Server
+
+If you want to test without running the app locally, send the request to the deployed Render URL from your machine:
+
+```bash
+curl -X POST -F "image=@photos/soup.jpg" https://stockbot-gemini-api.onrender.com/detect
+```
+
+This uses the same request format as local testing, but targets the hosted API.
+
 ### Example Response
 
 ```json
