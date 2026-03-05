@@ -17,7 +17,7 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 INGEST_URL = "https://stockbot-api-yu48.onrender.com/api/inventory/ingestion/classification/"
 
 # bot_id must be an integer for your backend
-BOT_ID = int(os.getenv("BOT_ID", "0"))
+BOT_ID = int(os.getenv("BOT_ID"))
 
 
 @app.route("/detect", methods=["POST"])
