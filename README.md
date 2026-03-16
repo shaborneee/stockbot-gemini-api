@@ -1,136 +1,171 @@
 # StockBot - AI Grocery Item Detector
 
-StockBot is a Flask-based API that uses Google's Gemini 2.5 Flash model to analyze images of grocery items and provide information about their shelf life and storage recommendations.
+Flask API that receives an image, sends it to Gemini 2.5 Flash for grocery classification, then posts the result to your ingestion backend.
 
-## Features
+## How To Run Locally
 
-- **Image Analysis**: Upload an image of a grocery item and get instant identification
-- **Expiration Date Prediction**: Calculates estimated expiration dates in `yyyy-mm-dd` format
-- **Generic Classification**: Returns only the generic item name (e.g., milk, bread, cheese)
-- **JSON Response**: Structured data output with item classification, expiration date, and metadata
-
-## What the Code Does
-
-The API provides a `/detect` endpoint that:
-1. Accepts an image file (POST request)
-2. Sends the image to Google's Gemini 2.5 Flash model
-3. Uses a custom prompt to identify the grocery item
-4. Returns a JSON response with:
-   - `classification`: Generic item name
-   - `expires_at`: Predicted expiration date (yyyy-mm-dd format)
-   - `image_id`: Original filename
-   - `bot_id`: Bot identifier
-
-## Installation
-
-### Prerequisites
+### 1) Prerequisites
 - Python 3.8+
 - pip
-- A Google Gemini API key
+- Gemini API key
 
-### Local Setup
+### 2) Setup
+```bash
+python -m venv .venv
+```
 
-1. **Clone or navigate to the project directory**:
-   ```bash
-   cd StockBot
-   ```
+Windows PowerShell:
+```bash
+.\.venv\Scripts\Activate.ps1
+```
 
-2. **Create a virtual environment**:
-   ```bash
-   python -m venv venv
-   ```
+Windows CMD:
+```bash
+.venv\Scripts\activate.bat
+```
 
-3. **Activate the virtual environment**:
-   
-   On Windows (PowerShell):
-   ```bash
-   .\venv\Scripts\Activate.ps1
-   ```
-   
-   On Windows (CMD):
-   ```bash
-   venv\Scripts\activate.bat
-   ```
-   
-   On macOS/Linux:
-   ```bash
-   source venv/bin/activate
-   ```
+macOS/Linux:
+```bash
+source .venv/bin/activate
+```
 
-4. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-5. **Create a `.env` file** in the project root:
-   ```
-   GEMINI_API_KEY=your_gemini_api_key_here
-   BOT_ID=stockbot
-   ```
+Create a `.env` file in the project root:
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
+BOT_ID=1
+```
 
-6. **Run the server**:
-   ```bash
-   python main.py
-   ```
-   
-   The server will start on `http://localhost:5000`
+Notes:
+- `BOT_ID` must be an integer because `main.py` casts it with `int(...)`.
 
-## Usage
+### 3) Start server
+```bash
+python main.py
+```
 
-### Test with cURL
+Server URL:
+- `http://localhost:5000`
 
+### 4) Test the endpoint locally
+
+Multipart upload:
 ```bash
 curl -X POST -F "image=@photos/soup.jpg" http://localhost:5000/detect
 ```
 
-Place your image files in the `photos/` folder. Replace `soup.jpg` with your actual image filename.
-
-### Test Locally Against the Public Server
-
-If you want to test without running the app locally, send the request to the deployed Render URL from your machine:
-
+Raw image bytes (ESP32-style):
 ```bash
-curl -X POST -F "image=@photos/soup.jpg" https://stockbot-gemini-api.onrender.com/detect
+curl -X POST \
+  -H "Content-Type: image/jpeg" \
+  -H "X-Filename: esp32_test.jpg" \
+  --data-binary "@photos/soup.jpg" \
+  http://localhost:5000/detect
 ```
 
-This uses the same request format as local testing, but targets the hosted API.
+### 5) Response format
 
-### Example Response
-
+Success (`200`):
 ```json
 {
-  "classification": "tomato soup",
-  "expires_at": "2026-03-12",
-  "image_id": "soup.jpg",
-  "bot_id": "stockbot"
+  "bot_id": 1,
+  "image_id": "esp32_test.jpg",
+  "classification": "milk",
+  "expires_at": "2026-03-24",
+  "backend_ingestion": {
+    "sent": true,
+    "status_code": 201,
+    "response_text": "...",
+    "error": null
+  }
 }
 ```
 
-## API Endpoints
+Error examples:
 
-### POST `/detect`
-
-**Request**:
-- Content-Type: `multipart/form-data`
-- Body: Image file with key `image`
-
-**Response** (200 OK):
-- JSON object with classification, expiration date, and metadata
-
-**Error Response** (400 Bad Request):
+No image provided (`400`):
 ```json
 {
-  "error": "No image file provided"
+  "error": "No image file or ESP32-CAM image bytes provided"
 }
 ```
 
-## Environment Variables
+Gemini invalid JSON (`502`):
+```json
+{
+  "error": "Gemini returned invalid JSON",
+  "raw": "..."
+}
+```
 
-- `GEMINI_API_KEY`: Your Google Gemini API key (required)
+## How The AI Server And ESP32 Camera Works
 
-## Getting a Gemini API Key
+### End-to-end flow
+1. ESP32-CAM captures a photo.
+2. ESP32 sends the image to `POST /detect`.
+3. Flask API loads the image and sends it to Gemini 2.5 Flash with the prompt rules.
+4. API parses `classification` and `expires_at` from Gemini output.
+5. API sends ingestion payload to backend:
+   - `bot_id`
+   - `image_id`
+   - `classification`
+   - `expires_at`
+6. API returns response to client with backend ingestion status.
 
-1. Visit [Google AI Studio](https://aistudio.google.com/app/apikey)
-2. Click "Create API Key"
-3. Copy the key and add it to your `.env` file
+### What gets logged
+For each request, the server logs a readable summary with:
+- file name
+- classification
+- gemini confidence (or `N/A` if unavailable)
+- gemini classification time (ms)
+- backend roundtrip time (ms)
+- ingestion payload
 
+### ESP32-CAM local instructions
+
+If your Flask server is running on your laptop and ESP32 is on the same Wi-Fi:
+- Use laptop local IP (for example `192.168.1.50`), not `localhost`.
+- Endpoint becomes: `http://192.168.1.50:5000/detect`
+
+### Connect AI-Thinker ESP32-CAM In Arduino IDE
+
+1. Install Arduino IDE (2.x recommended).
+2. Open File > Preferences.
+3. Add this URL to Additional Boards Manager URLs:
+  - `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json`
+4. Open Tools > Board > Boards Manager, search for `esp32`, then install Espressif ESP32.
+5. Open `esp32_cam_module.ino`.
+6. In Tools > Board, select `AI Thinker ESP32-CAM`.
+7. Select the correct COM port for your camera/USB-serial adapter.
+
+Upload steps (standard ESP32-CAM without native USB):
+- Connect USB-serial TX -> U0R and RX -> U0T.
+- Connect 5V and GND.
+- Pull IO0 to GND to enter flashing mode.
+- Click Upload.
+- After upload, disconnect IO0 from GND and press RST (or power-cycle).
+
+If you have an ESP32-CAM-MB (USB baseboard), plug it in by USB, choose the COM port, upload, then press reset if needed.
+
+### Build And Run The Camera Sketch
+
+1. In `esp32_cam_module.ino`, set:
+  - `WIFI_SSID`
+  - `WIFI_PASS`
+  - `SERVER_URL`
+2. Click Verify/Compile in Arduino IDE.
+3. Click Upload.
+4. Open Serial Monitor at 115200 baud to watch motion/upload logs.
+
+### Power Options After Upload
+
+- Powered by laptop USB: keep the camera plugged into your laptop and it will keep detecting motion and sending pictures.
+- Powered by external 5V source: use a stable 5V battery/power bank and the camera will keep detecting motion and sending pictures.
+
+Power tip:
+- ESP32-CAM is sensitive to voltage drops. Use a stable 5V source with enough current for camera + Wi-Fi bursts.
+```
