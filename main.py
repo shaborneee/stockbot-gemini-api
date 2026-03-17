@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import sys
 from flask import Flask, request, jsonify
 import google.genai as genai
 from dotenv import load_dotenv
@@ -11,9 +12,16 @@ import time
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
-
 app = Flask(__name__)
+
+# Ensure Flask application logs are emitted to STDOUT.
+stdout_handler = logging.StreamHandler(sys.stdout)
+stdout_handler.setLevel(logging.INFO)
+stdout_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+app.logger.handlers.clear()
+app.logger.addHandler(stdout_handler)
+app.logger.setLevel(logging.INFO)
+app.logger.propagate = False
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
