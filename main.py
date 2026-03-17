@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import PIL.Image
 import requests
 import time
+from typing import Any
 
 load_dotenv()
 
@@ -59,14 +60,21 @@ def _extract_gemini_error_code(error: Exception) -> int | None:
     return None
 
 
-def _normalize_expires_at(expires_at: str) -> str:
+def _normalize_expires_at(expires_at: Any) -> str | None:
     if not expires_at:
-        return ""
+        return None
+
+    if expires_at is None:
+        return None
+
+    expires_at = str(expires_at).strip()
+    if not expires_at or expires_at.lower() == "null":
+        return None
 
     try:
         parsed = datetime.strptime(expires_at, "%Y-%m-%d").date()
     except ValueError:
-        return ""
+        return None
 
     today = date.today()
     if parsed <= today:
@@ -92,12 +100,12 @@ def detect():
     prompt = f"""Look at this image and identify the single most prominent grocery item.
 Do NOT include brand names and only include a generic item name.
 The item MUST belong to one of these categories: fresh produce, dairy, meat, baked goods, canned goods, pantry staples, frozen items, snack foods, beverages.
-If the item cannot be identified, or if it does not belong to one of those categories, set classification to "unknown" and expires_at to empty string.
+If the item cannot be identified, or if it does not belong to one of those categories, set classification to "unknown" and expires_at to null.
 Today's date is {today_str}.
 Based on the item type, calculate the realistic expiration date (when it would typically spoil from today).
-expires_at MUST be a real calendar date in yyyy-mm-dd format and MUST be strictly after {today_str}.
+expires_at MUST be either null or a real calendar date in yyyy-mm-dd format that is strictly after {today_str}.
 Never return today's date or any past date.
-If you are unsure of the date, set expires_at to empty string.
+If you are unsure of the date, set expires_at to null.
 Use these shelf life guidelines:
 - Fresh produce (fruits, vegetables): 3-7 days
 - Dairy (milk, yogurt, cheese): 7-14 days
@@ -109,11 +117,11 @@ Use these shelf life guidelines:
 Return ONLY a valid JSON object in this exact format, no extra text:
 {{
     "classification": "classified item name only, or unknown",
-    "expires_at": "yyyy-mm-dd date format (must be after today)"
+    "expires_at": null
 }}"""
 
     classification = "unknown"
-    expires_at = ""
+    expires_at = None
     gemini_time = 0.0
     gemini_error_code = None
     response = None
@@ -136,11 +144,11 @@ Return ONLY a valid JSON object in this exact format, no extra text:
             result = {}
 
         classification = str(result.get("classification", "")).strip() or "unknown"
-        expires_at = str(result.get("expires_at", "")).strip()
+        expires_at = result.get("expires_at")
 
         if classification.lower() == "unknown":
             classification = "unknown"
-            expires_at = ""
+            expires_at = None
 
         expires_at = _normalize_expires_at(expires_at)
     except Exception as e:
