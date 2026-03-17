@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sys
+from datetime import date, datetime, timedelta
 from flask import Flask, request, jsonify
 import google.genai as genai
 from dotenv import load_dotenv
@@ -87,6 +88,22 @@ def _extract_gemini_error_code(error: Exception) -> int | None:
     return None
 
 
+def _normalize_expires_at(expires_at: str) -> str:
+    if not expires_at:
+        return ""
+
+    try:
+        parsed = datetime.strptime(expires_at, "%Y-%m-%d").date()
+    except ValueError:
+        return ""
+
+    today = date.today()
+    if parsed <= today:
+        return (today + timedelta(days=1)).isoformat()
+
+    return parsed.isoformat()
+
+
 @app.route("/detect", methods=["POST"])
 def detect():
     if "image" not in request.files:
@@ -100,11 +117,16 @@ def detect():
     except Exception as e:
         return jsonify({"error": f"Could not read image: {str(e)}"}), 400
 
-    prompt = """Look at this image and identify the single most prominent grocery item.
+    today_str = date.today().isoformat()
+    prompt = f"""Look at this image and identify the single most prominent grocery item.
 Do NOT include brand names and only include a generic item name.
 The item MUST belong to one of these categories: fresh produce, dairy, meat, baked goods, canned goods, pantry staples, frozen items, snack foods, beverages.
 If the item cannot be identified, or if it does not belong to one of those categories, set classification to "unknown" and expires_at to empty string.
+Today's date is {today_str}.
 Based on the item type, calculate the realistic expiration date (when it would typically spoil from today).
+expires_at MUST be a real calendar date in yyyy-mm-dd format and MUST be strictly after {today_str}.
+Never return today's date or any past date.
+If you are unsure of the date, set expires_at to empty string.
 Use these shelf life guidelines:
 - Fresh produce (fruits, vegetables): 3-7 days
 - Dairy (milk, yogurt, cheese): 7-14 days
@@ -114,10 +136,10 @@ Use these shelf life guidelines:
 - Pantry staples: 6-12 months
 - Frozen items: 6-12 months
 Return ONLY a valid JSON object in this exact format, no extra text:
-{
+{{
     "classification": "classified item name only, or unknown",
     "expires_at": "yyyy-mm-dd date format (must be after today)"
-}"""
+}}"""
 
     classification = "unknown"
     expires_at = ""
@@ -149,6 +171,8 @@ Return ONLY a valid JSON object in this exact format, no extra text:
         if classification.lower() == "unknown":
             classification = "unknown"
             expires_at = ""
+
+        expires_at = _normalize_expires_at(expires_at)
 
         gemini_confidence = _extract_confidence_percent(result, response)
     except Exception as e:
