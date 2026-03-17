@@ -32,35 +32,6 @@ INGEST_URL = "https://stockbot-api-yu48.onrender.com/api/inventory/ingestion/cla
 # bot_id must be an integer for your backend
 BOT_ID = int(os.getenv("BOT_ID"))
 
-def _extract_confidence_percent(result: dict, response) -> float | None:
-    raw_confidence = result.get("confidence")
-    if raw_confidence is None:
-        raw_confidence = result.get("gemini_confidence")
-
-    if raw_confidence is not None:
-        try:
-            value = float(raw_confidence)
-            # Normalize to percentage if Gemini returns 0-1.
-            if 0 <= value <= 1:
-                value *= 100
-            return max(0.0, min(100.0, value))
-        except (TypeError, ValueError):
-            pass
-
-    # Fallback: attempt to read a confidence-like field from candidate metadata.
-    try:
-        candidate = (response.candidates or [None])[0]
-        candidate_confidence = getattr(candidate, "confidence", None)
-        if candidate_confidence is not None:
-            value = float(candidate_confidence)
-            if 0 <= value <= 1:
-                value *= 100
-            return max(0.0, min(100.0, value))
-    except Exception:
-        pass
-
-    return None
-
 
 def _extract_gemini_error_code(error: Exception) -> int | None:
     # Prefer explicit SDK fields when available.
@@ -144,7 +115,6 @@ Return ONLY a valid JSON object in this exact format, no extra text:
     classification = "unknown"
     expires_at = ""
     gemini_time = 0.0
-    gemini_confidence = None
     gemini_error_code = None
     response = None
 
@@ -173,8 +143,6 @@ Return ONLY a valid JSON object in this exact format, no extra text:
             expires_at = ""
 
         expires_at = _normalize_expires_at(expires_at)
-
-        gemini_confidence = _extract_confidence_percent(result, response)
     except Exception as e:
         gemini_error_code = _extract_gemini_error_code(e)
         app.logger.warning(
@@ -215,15 +183,10 @@ Return ONLY a valid JSON object in this exact format, no extra text:
         ingest_status["error"] = str(e)
     ingest_time = (time.time() - ingest_start) * 1000
 
-    confidence_display = "N/A"
-    if gemini_confidence is not None:
-        confidence_display = f"{gemini_confidence:.2f}%"
-
     app.logger.info("=" * 70)
     app.logger.info("[DETECT] Request Summary")
     app.logger.info("file_name: %s", image_name)
     app.logger.info("classification: %s", classification)
-    app.logger.info("gemini_confidence: %s", confidence_display)
     app.logger.info("gemini_error_code: %s", gemini_error_code)
     app.logger.info("gemini_time_ms: %.2f", gemini_time)
     app.logger.info("backend_roundtrip_ms: %.2f", ingest_time)
