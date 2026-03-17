@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sys
+from datetime import date, datetime, timedelta
 from flask import Flask, request, jsonify
 import google.genai as genai
 from dotenv import load_dotenv
@@ -31,35 +32,6 @@ INGEST_URL = "https://stockbot-api-yu48.onrender.com/api/inventory/ingestion/cla
 # bot_id must be an integer for your backend
 BOT_ID = int(os.getenv("BOT_ID"))
 
-def _extract_confidence_percent(result: dict, response) -> float | None:
-    raw_confidence = result.get("confidence")
-    if raw_confidence is None:
-        raw_confidence = result.get("gemini_confidence")
-
-    if raw_confidence is not None:
-        try:
-            value = float(raw_confidence)
-            # Normalize to percentage if Gemini returns 0-1.
-            if 0 <= value <= 1:
-                value *= 100
-            return max(0.0, min(100.0, value))
-        except (TypeError, ValueError):
-            pass
-
-    # Fallback: attempt to read a confidence-like field from candidate metadata.
-    try:
-        candidate = (response.candidates or [None])[0]
-        candidate_confidence = getattr(candidate, "confidence", None)
-        if candidate_confidence is not None:
-            value = float(candidate_confidence)
-            if 0 <= value <= 1:
-                value *= 100
-            return max(0.0, min(100.0, value))
-    except Exception:
-        pass
-
-    return None
-
 
 def _extract_gemini_error_code(error: Exception) -> int | None:
     # Prefer explicit SDK fields when available.
@@ -87,6 +59,22 @@ def _extract_gemini_error_code(error: Exception) -> int | None:
     return None
 
 
+def _normalize_expires_at(expires_at: str) -> str:
+    if not expires_at:
+        return ""
+
+    try:
+        parsed = datetime.strptime(expires_at, "%Y-%m-%d").date()
+    except ValueError:
+        return ""
+
+    today = date.today()
+    if parsed <= today:
+        return (today + timedelta(days=1)).isoformat()
+
+    return parsed.isoformat()
+
+
 @app.route("/detect", methods=["POST"])
 def detect():
     if "image" not in request.files:
@@ -100,11 +88,16 @@ def detect():
     except Exception as e:
         return jsonify({"error": f"Could not read image: {str(e)}"}), 400
 
-    prompt = """Look at this image and identify the single most prominent grocery item.
+    today_str = date.today().isoformat()
+    prompt = f"""Look at this image and identify the single most prominent grocery item.
 Do NOT include brand names and only include a generic item name.
 The item MUST belong to one of these categories: fresh produce, dairy, meat, baked goods, canned goods, pantry staples, frozen items, snack foods, beverages.
 If the item cannot be identified, or if it does not belong to one of those categories, set classification to "unknown" and expires_at to empty string.
+Today's date is {today_str}.
 Based on the item type, calculate the realistic expiration date (when it would typically spoil from today).
+expires_at MUST be a real calendar date in yyyy-mm-dd format and MUST be strictly after {today_str}.
+Never return today's date or any past date.
+If you are unsure of the date, set expires_at to empty string.
 Use these shelf life guidelines:
 - Fresh produce (fruits, vegetables): 3-7 days
 - Dairy (milk, yogurt, cheese): 7-14 days
@@ -114,15 +107,14 @@ Use these shelf life guidelines:
 - Pantry staples: 6-12 months
 - Frozen items: 6-12 months
 Return ONLY a valid JSON object in this exact format, no extra text:
-{
+{{
     "classification": "classified item name only, or unknown",
     "expires_at": "yyyy-mm-dd date format (must be after today)"
-}"""
+}}"""
 
     classification = "unknown"
     expires_at = ""
     gemini_time = 0.0
-    gemini_confidence = None
     gemini_error_code = None
     response = None
 
@@ -150,7 +142,7 @@ Return ONLY a valid JSON object in this exact format, no extra text:
             classification = "unknown"
             expires_at = ""
 
-        gemini_confidence = _extract_confidence_percent(result, response)
+        expires_at = _normalize_expires_at(expires_at)
     except Exception as e:
         gemini_error_code = _extract_gemini_error_code(e)
         app.logger.warning(
@@ -191,15 +183,10 @@ Return ONLY a valid JSON object in this exact format, no extra text:
         ingest_status["error"] = str(e)
     ingest_time = (time.time() - ingest_start) * 1000
 
-    confidence_display = "N/A"
-    if gemini_confidence is not None:
-        confidence_display = f"{gemini_confidence:.2f}%"
-
     app.logger.info("=" * 70)
     app.logger.info("[DETECT] Request Summary")
     app.logger.info("file_name: %s", image_name)
     app.logger.info("classification: %s", classification)
-    app.logger.info("gemini_confidence: %s", confidence_display)
     app.logger.info("gemini_error_code: %s", gemini_error_code)
     app.logger.info("gemini_time_ms: %.2f", gemini_time)
     app.logger.info("backend_roundtrip_ms: %.2f", ingest_time)
