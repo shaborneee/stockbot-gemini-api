@@ -120,12 +120,28 @@ def _encode_jpeg_bytes(img: PIL.Image.Image) -> bytes:
 # Main inference endpoint: classify grocery image and queue backend ingestion.
 @app.route("/detect", methods=["POST"])
 def detect():
+    # Record server-side arrival time for transit calculation.
+    server_received_at_ms = time.time() * 1000
+
     # Validate request payload includes an image file.
     if "image" not in request.files:
         return jsonify({"error": "No image file provided"}), 400
 
     image_file = request.files["image"]
     image_name = image_file.filename
+
+    # Read timing fields sent by the ESP32.
+    # capture_ms: time from motion detected to photo taken on the ESP32.
+    # ai_send_timestamp_ms: ESP32 millis() recorded just before the HTTP POST.
+    try:
+        capture_ms = int(request.form.get("capture_ms", 0))
+    except (ValueError, TypeError):
+        capture_ms = None
+
+    try:
+        ai_send_timestamp_ms = int(request.form.get("ai_send_timestamp_ms", 0))
+    except (ValueError, TypeError):
+        ai_send_timestamp_ms = None
 
     # Decode and resize image for faster, more stable model calls.
     try:
@@ -219,6 +235,7 @@ Return ONLY a valid JSON object in this exact format, no extra text:
     }
 
     # Background ingestion worker keeps /detect latency low.
+    # Logs how long the DB/backend call takes once it completes.
     def _ingest_async(form_data: dict, files_payload: dict, name: str) -> None:
         ingest_start = time.time()
         try:
@@ -229,10 +246,16 @@ Return ONLY a valid JSON object in this exact format, no extra text:
                 timeout=15,
             )
             ingest_time = (time.time() - ingest_start) * 1000
-            app.logger.info("[INGEST] %s -> status=%s (%.0f ms)", name, r.status_code, ingest_time)
+            app.logger.info(
+                "[INGEST] %s -> status=%s | db_ingest_time_ms=%.0f ms",
+                name, r.status_code, ingest_time,
+            )
         except Exception as e:
             ingest_time = (time.time() - ingest_start) * 1000
-            app.logger.warning("[INGEST] error for %s after %.0f ms: %s", name, ingest_time, str(e))
+            app.logger.warning(
+                "[INGEST] error for %s after %.0f ms: %s",
+                name, ingest_time, str(e),
+            )
 
     threading.Thread(
         target=_ingest_async,
@@ -246,21 +269,20 @@ Return ONLY a valid JSON object in this exact format, no extra text:
         "queued": True,
     }
 
-    # Emit detailed request summary logs for monitoring and debugging.
+    # Compute ESP32 → server network transit time.
+    # Total server time elapsed since request arrived, minus Gemini time,
+    # gives a reliable proxy for network upload + image decode overhead.
+    server_processing_ms = (time.time() * 1000) - server_received_at_ms
+    esp32_to_server_ms = server_processing_ms - gemini_time
+
+    # Emit timing summary logs.
     app.logger.info("=" * 70)
-    app.logger.info("[DETECT] Request Summary")
-    app.logger.info("file_name: %s", image_name)
-    app.logger.info("classification: %s", classification)
-    app.logger.info("expires_at: %s", expires_at)
-    app.logger.info("gemini_error_code: %s", gemini_error_code)
-    app.logger.info("gemini_time_ms: %.2f", gemini_time)
-    app.logger.info("ingest_form_data:\n%s", json.dumps(ingest_form_data, indent=2))
-    app.logger.info(
-        "ingest_file_field: image (%s, image/jpeg, %d bytes)",
-        ingest_filename,
-        len(jpeg_bytes),
-    )
-    app.logger.info("backend_ingestion: queued")
+    app.logger.info("[DETECT] %s | classification=%s | expires_at=%s", image_name, classification, expires_at)
+    app.logger.info("[TIMING] capture_ms=%s ms  (motion detected → photo taken on ESP32)",
+                    capture_ms if capture_ms is not None else "N/A")
+    app.logger.info("[TIMING] esp32_to_server_ms=%.0f ms  (network upload + server decode)", esp32_to_server_ms)
+    app.logger.info("[TIMING] gemini_time_ms=%.0f ms  (Gemini AI inference)", gemini_time)
+    app.logger.info("[TIMING] db_ingest_time_ms=see [INGEST] log below  (async, logged when complete)")
     app.logger.info("=" * 70)
 
     # Build final response body for the caller.
