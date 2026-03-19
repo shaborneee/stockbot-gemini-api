@@ -270,8 +270,6 @@ Return ONLY a valid JSON object in this exact format, no extra text:
     }
 
     # Compute ESP32 → server network transit time.
-    # Total server time elapsed since request arrived, minus Gemini time,
-    # gives a reliable proxy for network upload + image decode overhead.
     server_processing_ms = (time.time() * 1000) - server_received_at_ms
     esp32_to_server_ms = server_processing_ms - gemini_time
 
