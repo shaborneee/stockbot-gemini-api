@@ -129,32 +129,28 @@ def detect():
 
     today_str = date.today().isoformat()
 
-    prompt = (
-        f"Identify the single most prominent grocery item in this image.\n"
-        f"Return ONLY valid JSON, no extra text, no markdown.\n\n"
-
-        f"CLASSIFICATION RULES:\n"
-        f"- Read ALL visible text on the packaging (brand, product name, variant, percentage, flavour).\n"
-        f"- Build the classification as: '[Brand] [full product descriptor]'.\n"
-        f"  Examples: 'Silk 2% Almond Milk', 'Heinz Tomato Ketchup', 'Tropicana Original Orange Juice'.\n"
-        f"- If no brand is visible, use just the generic descriptor, e.g. 'Whole Milk'.\n"
-        f"- For fresh produce (fruits, vegetables): also assess ripeness visually.\n"
-        f"  If the item looks overripe, bruised, or close to spoiling, append '(overripe)' to the name.\n"
-        f"  Example: 'Banana (overripe)', 'Avocado (overripe)'.\n"
-        f"- Category must be one of: fresh produce, dairy, meat, baked goods, "
-        f"canned goods, pantry staples, frozen items, snack foods, beverages.\n"
-        f"- If unidentifiable or outside these categories: classification = 'unknown', expires_at = null.\n\n"
-
-        f"EXPIRY RULES:\n"
-        f"- Today: {today_str}. expires_at must be yyyy-mm-dd and strictly after today, or null.\n"
-        f"- Use these baselines from today:\n"
-        f"  Fresh produce (normal): 3-7d | Fresh produce (overripe): 1-2d\n"
-        f"  Dairy: 7-14d | Meat: 3-5d | Baked goods: 3-7d\n"
-        f"  Canned goods: 1-2 years | Pantry staples: 6-12mo | Frozen: 6-12mo\n"
-        f"- If unsure, set expires_at to null.\n\n"
-
-        f'Return exactly: {{"classification": "...", "expires_at": "yyyy-mm-dd or null"}}'
-    )
+    prompt = f"""Look at this image and identify the single most prominent grocery item.
+Do NOT include brand names and only include a generic item name.
+The item MUST belong to one of these categories: fresh produce, dairy, meat, baked goods, canned goods, pantry staples, frozen items, snack foods, beverages.
+If the item cannot be identified, or if it does not belong to one of those categories, set classification to "unknown" and expires_at to null.
+Today's date is {today_str}.
+Based on the item type, calculate the realistic expiration date (when it would typically spoil from today).
+expires_at MUST be either null or a real calendar date in yyyy-mm-dd format that is strictly after {today_str}.
+Never return today's date or any past date.
+If you are unsure of the date, set expires_at to null.
+Use these shelf life guidelines:
+- Fresh produce (fruits, vegetables): 3-7 days
+- Dairy (milk, yogurt, cheese): 7-14 days
+- Meat (fresh): 3-5 days
+- Baked goods: 3-7 days
+- Canned goods: 1-2 years
+- Pantry staples: 6-12 months
+- Frozen items: 6-12 months
+Return ONLY a valid JSON object in this exact format, no extra text:
+{{
+    "classification": "classified item name only, or unknown",
+    "expires_at": null
+}}"""
 
     classification = "unknown"
     expires_at = None
