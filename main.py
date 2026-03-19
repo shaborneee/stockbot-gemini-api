@@ -110,6 +110,13 @@ def _preprocess_image(image_file) -> PIL.Image.Image:
     return PIL.Image.open(buf)
 
 
+def _encode_jpeg_bytes(img: PIL.Image.Image) -> bytes:
+    """Encode a PIL image as JPEG bytes for backend multipart upload."""
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
 # Main inference endpoint: classify grocery image and queue backend ingestion.
 @app.route("/detect", methods=["POST"])
 def detect():
@@ -192,23 +199,34 @@ Return ONLY a valid JSON object in this exact format, no extra text:
             str(e),
         )
 
-    # Build payload for backend ingestion service.
-    ingest_payload = {
+    # Ensure response contract: unknown or missing date must be returned as JSON null.
+    if classification.lower() == "unknown" or not expires_at:
+        expires_at = None
+
+    # Build metadata payload for backend ingestion service.
+    ingest_form_data = {
         "bot_id": BOT_ID,
         "image_id": str(image_name),
         "classification": classification,
         "expires_at": expires_at,
     }
 
+    jpeg_bytes = _encode_jpeg_bytes(img)
+    image_stem = os.path.splitext(str(image_name or "capture"))[0]
+    ingest_filename = f"{image_stem}.jpg"
+    ingest_files = {
+        "image": (ingest_filename, jpeg_bytes, "image/jpeg")
+    }
+
     # Background ingestion worker keeps /detect latency low.
-    def _ingest_async(payload: dict, name: str) -> None:
+    def _ingest_async(form_data: dict, files_payload: dict, name: str) -> None:
         ingest_start = time.time()
         try:
             r = requests.post(
                 INGEST_URL,
-                json=payload,
+                data=form_data,
+                files=files_payload,
                 timeout=15,
-                headers={"Content-Type": "application/json"},
             )
             ingest_time = (time.time() - ingest_start) * 1000
             app.logger.info("[INGEST] %s -> status=%s (%.0f ms)", name, r.status_code, ingest_time)
@@ -218,7 +236,7 @@ Return ONLY a valid JSON object in this exact format, no extra text:
 
     threading.Thread(
         target=_ingest_async,
-        args=(ingest_payload, image_name),
+        args=(ingest_form_data, ingest_files, image_name),
         daemon=True,
     ).start()
 
@@ -236,7 +254,12 @@ Return ONLY a valid JSON object in this exact format, no extra text:
     app.logger.info("expires_at: %s", expires_at)
     app.logger.info("gemini_error_code: %s", gemini_error_code)
     app.logger.info("gemini_time_ms: %.2f", gemini_time)
-    app.logger.info("ingest_payload:\n%s", json.dumps(ingest_payload, indent=2))
+    app.logger.info("ingest_form_data:\n%s", json.dumps(ingest_form_data, indent=2))
+    app.logger.info(
+        "ingest_file_field: image (%s, image/jpeg, %d bytes)",
+        ingest_filename,
+        len(jpeg_bytes),
+    )
     app.logger.info("backend_ingestion: queued")
     app.logger.info("=" * 70)
 
